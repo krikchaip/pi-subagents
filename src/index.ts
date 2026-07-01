@@ -13,7 +13,7 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { defineTool, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, getAgentDir, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
-import { Container, Key, matchesKey, type SettingItem, SettingsList, Spacer, Text } from "@earendil-works/pi-tui";
+import { Container, type SettingItem, Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { AgentManager } from "./agent-manager.js";
 import { getAgentConversation, getDefaultMaxTurns, getGraceTurns, normalizeMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns, steerAgent } from "./agent-runner.js";
@@ -48,6 +48,7 @@ import {
   type UICtx,
 } from "./ui/agent-widget.js";
 import { FleetList, type FleetUICtx } from "./ui/fleet-list.js";
+import { PolishedSettingsList } from "./ui/polished-settings-list.js";
 import { showSchedulesMenu } from "./ui/schedule-menu.js";
 import { addUsage, getLifetimeTotal, getSessionContextPercent, type LifetimeUsage } from "./usage.js";
 
@@ -1596,8 +1597,7 @@ Terse command-style prompts produce shallow, generic work.
     };
 
     // One row per agent (name in the left column, model on the right); the
-    // full description renders below the highlighted row via SettingsList,
-    // exactly like the Settings menu — so long descriptions never wrap the list.
+    // selected agent description renders in a fixed-height panel below.
     const items: SettingItem[] = allNames.map(name => {
       const cfg = getAgentConfig(name);
       const disabled = cfg?.enabled === false;
@@ -1619,26 +1619,17 @@ Terse command-style prompts produce shallow, generic work.
     if (hasCustom) legendParts.push("• = project  ◦ = global");
     if (hasDisabled) legendParts.push("✕ = disabled");
 
-    const selected = await ctx.ui.custom<string | undefined>((_tui, _theme, _kb, done) => {
-      const slTheme = getSettingsListTheme();
-      const list = new SettingsList(
-        items,
-        Math.min(items.length, 12),
-        slTheme,
-        id => done(id), // Enter/Space on a row → return that agent's name
-        () => done(undefined), // Esc → cancel
-      );
-      const container = new Container();
-      container.addChild(new Text("Agent types", 0, 0));
-      if (legendParts.length) container.addChild(new Text(slTheme.hint(legendParts.join("  ")), 0, 0));
-      container.addChild(new Spacer(1));
-      container.addChild(list);
-      return {
-        render: (w: number) => container.render(w),
-        invalidate: () => container.invalidate(),
-        handleInput: (data: string) => list.handleInput?.(data),
-      };
-    });
+    const selected = await ctx.ui.custom<string | undefined>((_tui, theme, _kb, done) => new PolishedSettingsList({
+      title: "Agent types",
+      items,
+      maxVisible: Math.min(items.length, 12),
+      theme,
+      listTheme: getSettingsListTheme(),
+      legend: legendParts.join("  ") || undefined,
+      activationHint: "Enter/Space open",
+      onActivate: id => { done(id); return true; },
+      onCancel: () => done(undefined),
+    }));
 
     if (selected && getAgentConfig(selected)) {
       await showAgentDetail(ctx, selected);
@@ -2205,48 +2196,24 @@ ${systemPrompt}
       }
     }
 
-    let list: SettingsList;
-    // Track current selection index directly (SettingsList doesn't expose it).
-    // Updated on arrow keys so Enter knows which field is selected immediately.
-    let currentIndex = 0;
-
-    const result = await ctx.ui.custom<string | undefined>((_tui, _theme, _kb, done) => {
+    const result = await ctx.ui.custom<string | undefined>((_tui, theme, _kb, done) => {
       const items = buildItems();
 
-      list = new SettingsList(
+      return new PolishedSettingsList({
+        title: "⚙ Subagent Settings",
         items,
-        items.length + 2,
-        getSettingsListTheme(),
-        (id, newValue) => {
-          applyValue(id, newValue);
+        maxVisible: items.length,
+        theme,
+        listTheme: getSettingsListTheme(),
+        activationHint: "Enter/Space change/type",
+        onChange: (id, newValue) => applyValue(id, newValue),
+        onActivate: id => {
+          if (!NUMERIC_IDS.has(id)) return false;
+          done(id);
+          return true;
         },
-        () => done(undefined as undefined),
-      );
-
-      const container = new Container();
-      container.addChild(new Text("⚙  Subagent Settings", 0, 0));
-      container.addChild(new Spacer(1));
-      container.addChild(list);
-
-      return {
-        render: (w: number) => container.render(w),
-        invalidate: () => container.invalidate(),
-        handleInput: (data: string) => {
-          // Track navigation so Enter knows the current field
-          if (matchesKey(data, "up")) {
-            currentIndex = Math.max(0, currentIndex - 1);
-          } else if (matchesKey(data, "down")) {
-            currentIndex = Math.min(items.length - 1, currentIndex + 1);
-          }
-
-          // Enter on numeric field → close and prompt for typed input
-          if (matchesKey(data, Key.enter) && NUMERIC_IDS.has(items[currentIndex].id)) {
-            done(items[currentIndex].id);
-            return;
-          }
-          list.handleInput?.(data);
-        },
-      };
+        onCancel: () => done(undefined as undefined),
+      });
     });
 
     // If a numeric field ID was returned, prompt for typed input
