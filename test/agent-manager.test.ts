@@ -288,9 +288,40 @@ describe("AgentManager — Bug 3 clearCompleted", () => {
     });
     await manager.getRecord(id)!.promise;
 
-    manager.clearCompleted();
+    await manager.clearCompleted();
 
     expect(disposeSpy).toHaveBeenCalledOnce();
+  });
+
+  it("clearCompleted emits session_shutdown before disposing sessions", async () => {
+    manager = new AgentManager();
+    const calls: string[] = [];
+    const sess = {
+      hasExtensionHandlers: vi.fn(() => true),
+      extensionRunner: {
+        emit: vi.fn(async (event: any) => {
+          calls.push(`shutdown:${event.reason}`);
+        }),
+      },
+      dispose: vi.fn(() => calls.push("dispose")),
+    };
+    vi.mocked(runAgent).mockResolvedValue({
+      responseText: "done",
+      session: sess as any,
+      aborted: false,
+      steered: false,
+    });
+
+    const id = manager.spawn(mockPi, mockCtx, "general-purpose", "test", {
+      description: "test",
+      isBackground: true,
+    });
+    await manager.getRecord(id)!.promise;
+
+    await manager.clearCompleted(false, "new");
+
+    expect(sess.extensionRunner.emit).toHaveBeenCalledWith({ type: "session_shutdown", reason: "new" });
+    expect(calls).toEqual(["shutdown:new", "dispose"]);
   });
 
   it("clearCompleted removes error and stopped records", async () => {

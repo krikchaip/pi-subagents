@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
-import type { AgentSession, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, ExtensionAPI, ExtensionContext, SessionShutdownEvent } from "@earendil-works/pi-coding-agent";
 import { resumeAgent, runAgent, type ToolActivity } from "./agent-runner.js";
 import type { AgentInvocation, AgentRecord, IsolationMode, SubagentType, ThinkingLevel } from "./types.js";
 import { addUsage } from "./usage.js";
@@ -124,7 +124,7 @@ export class AgentManager {
     this.onCompact = onCompact;
     this.maxConcurrent = maxConcurrent;
     // Cleanup completed agents after 10 minutes (but keep sessions for resume)
-    this.cleanupInterval = setInterval(() => this.cleanup(), 60_000);
+    this.cleanupInterval = setInterval(() => { void this.cleanup(); }, 60_000);
     this.cleanupInterval.unref();
   }
 
@@ -522,19 +522,42 @@ export class AgentManager {
     return true;
   }
 
-  /** Dispose a record's session and remove it from the map. */
-  private removeRecord(id: string, record: AgentRecord): void {
-    record.session?.dispose?.();
-    record.session = undefined;
-    this.agents.delete(id);
+  /** Emit extension shutdown before disposing a subagent session. */
+  private async shutdownAndDisposeSession(
+    session: AgentSession | undefined,
+    reason: SessionShutdownEvent["reason"],
+  ): Promise<void> {
+    if (!session) return;
+    try {
+      if (typeof session.hasExtensionHandlers === "function" && session.hasExtensionHandlers("session_shutdown")) {
+        await session.extensionRunner.emit({ type: "session_shutdown", reason });
+      }
+    } catch {
+      // Best-effort lifecycle cleanup: dispose must still run even if an
+      // extension shutdown handler or stale runner fails.
+    } finally {
+      session.dispose?.();
+    }
   }
 
-  private cleanup() {
+  /** Dispose a record's session and remove it from the map. */
+  private async removeRecord(
+    id: string,
+    record: AgentRecord,
+    reason: SessionShutdownEvent["reason"],
+  ): Promise<void> {
+    const session = record.session;
+    record.session = undefined;
+    this.agents.delete(id);
+    await this.shutdownAndDisposeSession(session, reason);
+  }
+
+  private async cleanup() {
     const cutoff = Date.now() - 10 * 60_000;
     for (const [id, record] of this.agents) {
       if (record.status === "running" || record.status === "queued") continue;
       if ((record.completedAt ?? 0) >= cutoff) continue;
-      this.removeRecord(id, record);
+      await this.removeRecord(id, record, "quit");
     }
   }
 
@@ -544,11 +567,11 @@ export class AgentManager {
    * Pass skipUnconsumed=true to preserve records the LLM hasn't read yet
    * (resultConsumed=false) — they will be evicted by the 10-minute cleanup timer instead.
    */
-  clearCompleted(skipUnconsumed = false): void {
+  async clearCompleted(skipUnconsumed = false, reason: SessionShutdownEvent["reason"] = "new"): Promise<void> {
     for (const [id, record] of this.agents) {
       if (record.status === "running" || record.status === "queued") continue;
       if (skipUnconsumed && !record.resultConsumed) continue;
-      this.removeRecord(id, record);
+      await this.removeRecord(id, record, reason);
     }
   }
 
@@ -599,14 +622,17 @@ export class AgentManager {
     }
   }
 
-  dispose() {
+  async dispose(reason: SessionShutdownEvent["reason"] = "quit") {
     clearInterval(this.cleanupInterval);
     // Clear queue
     this.queue = [];
-    for (const record of this.agents.values()) {
-      record.session?.dispose();
-    }
+    const records = [...this.agents.values()];
     this.agents.clear();
+    await Promise.all(records.map(async (record) => {
+      const session = record.session;
+      record.session = undefined;
+      await this.shutdownAndDisposeSession(session, reason);
+    }));
     // Prune any orphaned git worktrees (crash recovery)
     try { pruneWorktrees(process.cwd()); } catch { /* ignore */ }
     // Also prune repos that caller-supplied cwds created worktrees in — a clean

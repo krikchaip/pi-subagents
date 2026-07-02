@@ -487,12 +487,12 @@ export default function (pi: ExtensionAPI) {
   // Capture ctx from session_start for RPC spawn handler + start the scheduler.
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
-    manager.clearCompleted(true);
+    await manager.clearCompleted(true, "new");
     if (isSchedulingEnabled() && !scheduler.isActive()) startScheduler(ctx);
   });
 
-  pi.on("session_before_switch", () => {
-    manager.clearCompleted(true);
+  pi.on("session_before_switch", async () => {
+    await manager.clearCompleted(true, "resume");
     scheduler.stop();
   });
 
@@ -523,7 +523,7 @@ export default function (pi: ExtensionAPI) {
     for (const timer of pendingNudges.values()) clearTimeout(timer);
     pendingNudges.clear();
     fleet.dispose();
-    manager.dispose();
+    await manager.dispose("quit");
   });
 
   // Live widget: show running agents above editor.
