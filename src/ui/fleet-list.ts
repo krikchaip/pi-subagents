@@ -1,14 +1,17 @@
 /**
  * fleet-list.ts — Claude Code-style "FleetView" list rendered below the editor.
  *
- * Shows `main` + each running/queued subagent as a navigable list. Pressing ↓ (or
- * ←) at an empty prompt activates the list; ↑/↓ move the selection (filled ⏺ marker),
- * Enter opens the selected agent's live conversation overlay, Esc returns to the prompt.
- * A viewer stays open when its agent finishes; finished agents linger briefly in the list.
+ * Shows `main` + each running/queued subagent as a navigable list. Pressing Shift+←
+ * while the editor owns focus toggles the list active/inactive; Esc also deactivates.
+ * When active, FleetView owns the keyboard: ↑/↓ move the selection (filled ⏺
+ * marker), Enter opens the selected agent's live conversation overlay, and unrelated
+ * keys are consumed as no-ops. A viewer stays open when its agent finishes; finished
+ * agents linger briefly in the list.
  *
- * Mechanics (see plan): the list is a `belowEditor` widget (render-only), and ALL key
- * handling goes through `onTerminalInput` — which fires before the focused editor and
- * can `consume` keys — gated on `getEditorText() === ""` so normal typing is untouched.
+ * Mechanics (see plan): the list is a `belowEditor` widget (render-only), and key
+ * handling goes through `onTerminalInput` — which fires before the focused component
+ * and can `consume` keys. FleetView only activates when the main editor owns focus;
+ * menus/dialogs/selectors make the visible list keyboard-dead.
  */
 
 import { Editor, isKeyRelease, Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
@@ -82,7 +85,7 @@ export class FleetList {
   private timer: ReturnType<typeof setInterval> | undefined;
 
   private enabled = true;
-  /** Whether arrow keys currently navigate the list (vs. flow to the editor). */
+  /** Whether FleetView currently owns keyboard input. */
   private active = false;
   /** 0 = `main`, 1..N = subagents. */
   private selectedIndex = 0;
@@ -215,7 +218,7 @@ export class FleetList {
     // emits both, and matchesKey matches either) — act on press only, or every
     // tap would move/fire twice. Repeats still pass through for held-key nav.
     if (isKeyRelease(data)) return undefined;
-    // While an overlay is open, let it own all input.
+    // While the Fleet conversation overlay is open, let it own all input.
     if (this.viewerClose) return undefined;
     // Input listeners fire BEFORE the focused component, and dialogs
     // (ctx.ui.select/confirm/input, pi's own menus) swap the prompt editor out
@@ -226,10 +229,10 @@ export class FleetList {
       return undefined;
     }
 
+    const isToggle = matchesKey(data, "shift+left");
+
     if (!this.active) {
-      // Activate: ↓ or ← at an empty prompt moves focus into the list.
-      const isActivator = matchesKey(data, "down") || matchesKey(data, "left");
-      if (isActivator && this.agentRecords().length > 0 && this.ui.getEditorText() === "") {
+      if (isToggle && this.agentRecords().length > 0) {
         this.active = true;
         this.selectedIndex = 0;
         this.update();
@@ -238,7 +241,8 @@ export class FleetList {
       return undefined;
     }
 
-    // Active — arrows navigate, Enter opens, Esc / Up-past-top exits.
+    // Active — FleetView owns the keyboard. Only explicit close keys leave it.
+    if (isToggle) { this.deactivate(); return { consume: true }; }
     if (matchesKey(data, "down")) {
       const max = this.roster().length - 1;
       this.selectedIndex = Math.min(max, this.selectedIndex + 1);
@@ -246,17 +250,15 @@ export class FleetList {
       return { consume: true };
     }
     if (matchesKey(data, "up")) {
-      if (this.selectedIndex === 0) { this.deactivate(); return { consume: true }; }
-      this.selectedIndex -= 1;
+      this.selectedIndex = Math.max(0, this.selectedIndex - 1);
       this.update();
       return { consume: true };
     }
     if (matchesKey(data, "escape")) { this.deactivate(); return { consume: true }; }
     if (matchesKey(data, Key.enter)) { this.openSelected(); return { consume: true }; }
 
-    // Any other key cancels navigation and flows to the editor.
-    this.deactivate();
-    return undefined;
+    // Other keys are inert while FleetView is focused; do not leak to the editor.
+    return { consume: true };
   }
 
   /**
@@ -342,14 +344,16 @@ export class FleetList {
     // Clamp locally so a render between a roster shrink and the next update()
     // (e.g. on terminal resize) never loses the selection marker.
     const sel = Math.min(this.selectedIndex, agents.length);
+    const editorOwnsFocus = this.editorHasFocus();
+    const keyboardActive = this.active && editorOwnsFocus;
 
-    const hint = this.active
-      ? "↑↓ select · enter view · esc back"
-      : "esc to interrupt · ← for agents · ↓ to manage";
+    const rail = keyboardActive ? theme.bold(theme.fg("accent", "████")) : theme.fg("muted", "░░░░");
+    const heading = keyboardActive
+      ? `${rail} ${theme.bold(theme.fg("mdHeading", "FLEET"))} ${theme.bold(theme.fg("warning", "LIVE"))} · ↑↓ select · enter view · esc/shift+left back`
+      : `${rail} ${theme.fg("muted", "Fleet dormant · shift+left for agents")}`
     const lines: string[] = [];
-    lines.push(truncateToWidth("  " + theme.fg("dim", hint), width));
-    lines.push("");
-    lines.push(truncateToWidth(`  ${this.bullet(0, sel, theme)} main`, width));
+    lines.push(truncateToWidth(heading, width));
+    lines.push(truncateToWidth(`${rail}   ${this.bullet(0, sel, keyboardActive, theme)} main`, width));
 
     // Window the agent rows so the selected one stays visible.
     const visible = Math.min(MAX_AGENT_ROWS, agents.length);
@@ -357,21 +361,22 @@ export class FleetList {
     const start = selAgent < visible ? 0 : selAgent - visible + 1;
     const hiddenBelow = agents.length - (start + visible);
 
-    if (start > 0) lines.push(rightAlign("", theme.fg("dim", `↑ ${start} more`), width));
+    if (start > 0) lines.push(rightAlign(rail, theme.fg("dim", `↑ ${start} more`), width));
     for (let a = start; a < start + visible; a++) {
-      lines.push(this.renderAgentRow(a + 1, sel, agents[a].record, width, theme));
+      lines.push(this.renderAgentRow(a + 1, sel, agents[a].record, width, keyboardActive, rail, theme));
     }
-    if (hiddenBelow > 0) lines.push(rightAlign("", theme.fg("dim", `↓ ${hiddenBelow} more`), width));
+    if (hiddenBelow > 0) lines.push(rightAlign(rail, theme.fg("dim", `↓ ${hiddenBelow} more`), width));
 
     return lines;
   }
 
-  private bullet(rosterIndex: number, sel: number, theme: Theme): string {
-    return rosterIndex === sel ? theme.fg("accent", "⏺") : theme.fg("dim", "◯");
+  private bullet(rosterIndex: number, sel: number, active: boolean, theme: Theme): string {
+    if (rosterIndex === sel) return active ? theme.fg("warning", "⏺") : theme.fg("muted", "⏺");
+    return theme.fg("dim", "◯");
   }
 
-  private renderAgentRow(rosterIndex: number, sel: number, record: AgentRecord, width: number, theme: Theme): string {
-    const left = `  ${this.bullet(rosterIndex, sel, theme)} ${theme.fg("muted", getDisplayName(record.type))}  ${record.description}`;
+  private renderAgentRow(rosterIndex: number, sel: number, record: AgentRecord, width: number, active: boolean, rail: string, theme: Theme): string {
+    const left = `${rail}   ${this.bullet(rosterIndex, sel, active, theme)} ${theme.fg("muted", getDisplayName(record.type))}  ${record.description}`;
     const tokens = getLifetimeTotal(this.agentActivity.get(record.id)?.lifetimeUsage ?? record.lifetimeUsage);
     const elapsedMs = (record.completedAt ?? Date.now()) - record.startedAt; // freezes once finished
     const right = theme.fg("dim", `${formatFleetElapsed(elapsedMs)} · ${formatFleetTokens(tokens)}`);

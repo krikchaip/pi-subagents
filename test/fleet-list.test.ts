@@ -9,6 +9,7 @@ import { FleetList, type FleetUICtx, formatFleetElapsed, formatFleetTokens } fro
 const DOWN = "\x1b[B";
 const UP = "\x1b[A";
 const LEFT = "\x1b[D";
+const SHIFT_LEFT = "\x1b[1;2D";
 const RIGHT = "\x1b[C";
 const ESC = "\x1b";
 const ENTER = "\r";
@@ -63,6 +64,8 @@ interface Harness {
   closeOverlay: () => Promise<void>;
   /** The fake `tui` handed to the widget factory; tests set `focusedComponent` on it. */
   widgetTui: { requestRender(): void; focusedComponent?: unknown };
+  /** Simulate TUI focus ownership. */
+  setFocusedComponent: (component: unknown) => void;
 }
 
 function harness(agents: AgentRecord[]): Harness {
@@ -73,7 +76,10 @@ function harness(agents: AgentRecord[]): Harness {
   let closed = false;
   let overlayDone: ((r: undefined) => void) | undefined;
   let overlayComponent: { handleInput(data: string): void } | undefined;
-  const fakeTui = { requestRender: () => {}, terminal: { columns: 120, rows: 40 } };
+  const fakeTui: { requestRender(): void; terminal: { columns: number; rows: number }; focusedComponent?: unknown } = {
+    requestRender: () => {},
+    terminal: { columns: 120, rows: 40 },
+  };
 
   const ui: FleetUICtx = {
     setWidget: (_key, content) => { widgetFactory = content as any; },
@@ -109,6 +115,7 @@ function harness(agents: AgentRecord[]): Harness {
     overlayClosed: () => closed,
     closeOverlay: async () => { overlayDone?.(undefined); await Promise.resolve(); },
     widgetTui: fakeTui,
+    setFocusedComponent: (component) => { fakeTui.focusedComponent = component; },
   };
 }
 
@@ -138,20 +145,22 @@ describe("FleetList navigation", () => {
     expect(h.render()).toEqual([]);
   });
 
-  it("activates on ↓ at an empty prompt, consuming the key", () => {
+  it("does not activate on plain ↓/←", () => {
     const h = harness([makeRecord()]);
-    const res = h.press(DOWN);
+    expect(h.press(DOWN)).toBeUndefined();
+    expect(h.press(LEFT)).toBeUndefined();
+    expect(h.render().some(l => l.includes("shift+left for agents"))).toBe(true);
+  });
+
+  it("activates on Shift+←, consuming the key", () => {
+    const h = harness([makeRecord()]);
+    const res = h.press(SHIFT_LEFT);
     expect(res).toEqual({ consume: true });
     // main selected, list active → nav hint shown
     expect(h.render().some(l => l.includes("enter view"))).toBe(true);
   });
 
-  it("also activates on ← (matches the '← for agents' hint)", () => {
-    const h = harness([makeRecord()]);
-    expect(h.press(LEFT)).toEqual({ consume: true });
-  });
-
-  it("does NOT activate when the prompt is non-empty (typing is preserved)", () => {
+  it("does NOT activate on plain arrows when the prompt is non-empty", () => {
     const h = harness([makeRecord()]);
     h.setEditorText("hello");
     expect(h.press(DOWN)).toBeUndefined();
@@ -162,10 +171,10 @@ describe("FleetList navigation", () => {
       makeRecord({ id: "a1", description: "one" }),
       makeRecord({ id: "a2", description: "two" }),
     ]);
-    h.press(DOWN);          // activate → selection on main (idx 0)
-    h.press(DOWN_RELEASE);  // release half of the SAME tap — must be a no-op
+    h.press(SHIFT_LEFT);    // activate → selection on main (idx 0)
+    h.press(DOWN_RELEASE);  // release half of a ↓ tap — must be a no-op
     expect(h.render().find(l => l.includes("main"))).toContain("⏺");
-    h.press(DOWN);          // a real second tap → first agent
+    h.press(DOWN);          // a real ↓ tap → first agent
     h.press(DOWN_RELEASE);
     expect(h.render().find(l => l.includes("one"))).toContain("⏺");
     expect(h.render().find(l => l.includes("two"))).toContain("◯");
@@ -177,7 +186,7 @@ describe("FleetList navigation", () => {
       makeRecord({ id: "a2", description: "two" }),
     ];
     const h = harness(agents);
-    h.press(DOWN); // activate → index 0 (main)
+    h.press(SHIFT_LEFT); // activate → index 0 (main)
     h.press(DOWN); // → 1 (a1)
     expect(h.render().find(l => l.includes("one"))).toContain("⏺");
     h.press(DOWN); // → 2 (a2)
@@ -186,32 +195,59 @@ describe("FleetList navigation", () => {
     expect(h.render().find(l => l.includes("one"))).toContain("◯");
   });
 
-  it("↑ above 'main' deactivates (returns to the prompt)", () => {
+  it("↑ above 'main' stays active and clamps at the top", () => {
     const h = harness([makeRecord()]);
-    h.press(DOWN); // activate, index 0
+    h.press(SHIFT_LEFT); // activate, index 0
     expect(h.press(UP)).toEqual({ consume: true });
-    // back to inactive hint
-    expect(h.render().some(l => l.includes("← for agents"))).toBe(true);
+    const heading = h.render()[0];
+    expect(heading).toContain("<mdHeading>FLEET</mdHeading>");
+    expect(heading).toContain("<warning>LIVE</warning>");
+    expect(heading).not.toContain("KEYBOARD CAPTURED");
+    expect(h.render().find(l => l.includes("main"))).toContain("⏺");
   });
 
   it("Esc deactivates", () => {
     const h = harness([makeRecord()]);
-    h.press(DOWN);
+    h.press(SHIFT_LEFT);
     expect(h.press(ESC)).toEqual({ consume: true });
-    expect(h.render().some(l => l.includes("← for agents"))).toBe(true);
+    expect(h.render().some(l => l.includes("shift+left for agents"))).toBe(true);
   });
 
-  it("passes non-nav keys through and cancels navigation", () => {
+  it("consumes inert keys while active without leaving FleetView", () => {
     const h = harness([makeRecord()]);
-    h.press(DOWN);
-    expect(h.press(RIGHT)).toBeUndefined();
-    expect(h.render().some(l => l.includes("← for agents"))).toBe(true);
+    h.press(SHIFT_LEFT);
+    expect(h.press(RIGHT)).toEqual({ consume: true });
+    expect(h.press(LEFT)).toEqual({ consume: true });
+    expect(h.press("/")).toEqual({ consume: true });
+    expect(h.press("a")).toEqual({ consume: true });
+    const heading = h.render()[0];
+    expect(heading).toContain("<mdHeading>FLEET</mdHeading>");
+    expect(heading).toContain("<warning>LIVE</warning>");
+    expect(heading).not.toContain("KEYBOARD CAPTURED");
+    expect(h.render().find(l => l.includes("main"))).toContain("⏺");
+  });
+
+  it("does not consume keys while another UI owns focus", () => {
+    const h = harness([makeRecord({ id: "a1", description: "one" })]);
+    h.press(SHIFT_LEFT);
+    expect(h.render().find(l => l.includes("main"))).toContain("⏺");
+
+    h.setFocusedComponent({ handleInput: vi.fn() });
+    expect(h.press(DOWN)).toBeUndefined();
+    expect(h.press(ENTER)).toBeUndefined();
+    expect(h.press(ESC)).toBeUndefined();
+    expect(h.press(SHIFT_LEFT)).toBeUndefined();
+
+    const lines = h.render();
+    expect(lines[0]).toContain("Fleet dormant");
+    expect(lines.find(l => l.includes("main"))).toContain("⏺");
+    expect(lines.find(l => l.includes("one"))).toContain("◯");
   });
 
   it("ignores all input while disabled and hides the widget", () => {
     const h = harness([makeRecord()]);
     h.fleet.setEnabled(false);
-    expect(h.press(DOWN)).toBeUndefined();
+    expect(h.press(SHIFT_LEFT)).toBeUndefined();
     expect(h.render()).toEqual([]);
   });
 
@@ -269,25 +305,25 @@ describe("FleetList vs other focused components (#123)", () => {
   it("does not steal navigation keys from a selector opened while the list was active", () => {
     const h = harness([makeRecord()]);
     focusInHarness(h, realEditor());
-    expect(h.press(DOWN)).toEqual({ consume: true }); // activate at the prompt
-    focusInHarness(h, { kind: "selector" });          // a dialog takes focus
+    expect(h.press(SHIFT_LEFT)).toEqual({ consume: true }); // activate at the prompt
+    focusInHarness(h, { kind: "selector" });                // a dialog takes focus
     expect(h.press(DOWN)).toBeUndefined();
     expect(h.press(ENTER)).toBeUndefined();
     expect(h.press(ESC)).toBeUndefined();
     // and the list dropped back to its inactive hint
-    expect(h.render().some(l => l.includes("← for agents"))).toBe(true);
+    expect(h.render().some(l => l.includes("shift+left for agents"))).toBe(true);
   });
 
   it("still activates when the prompt editor has focus", () => {
     const h = harness([makeRecord()]);
     focusInHarness(h, realEditor());
-    expect(h.press(DOWN)).toEqual({ consume: true });
+    expect(h.press(SHIFT_LEFT)).toEqual({ consume: true });
   });
 
   it("assumes the editor when focus is unknowable (no tui yet / nothing focused)", () => {
     const h = harness([makeRecord()]);
     // No render yet → the list has never seen a tui: activation must still work.
-    expect(h.press(DOWN)).toEqual({ consume: true });
+    expect(h.press(SHIFT_LEFT)).toEqual({ consume: true });
   });
 });
 
@@ -296,7 +332,7 @@ describe("FleetList rendering", () => {
     const h = harness([makeRecord({ description: "Sleep then report 1" })]);
     const lines = h.render(120);
     // hint + blank + main + one agent
-    expect(lines[0]).toContain("← for agents");
+    expect(lines[0]).toContain("shift+left for agents");
     expect(lines.find(l => l.includes("main"))).toContain("⏺"); // main selected by default
     const agentLine = lines.find(l => l.includes("Sleep then report 1"))!;
     expect(agentLine).toContain("◯");
@@ -351,7 +387,7 @@ describe("FleetList rendering", () => {
     const agents = Array.from({ length: 8 }, (_, i) =>
       makeRecord({ id: `a${i}`, description: `report ${i}` }));
     const h = harness(agents);
-    h.press(DOWN); // activate (main)
+    h.press(SHIFT_LEFT); // activate (main)
     // step down to the last agent (8 agents → roster index 8)
     for (let i = 0; i < 8; i++) h.press(DOWN);
     const lines = h.render(120);
@@ -363,10 +399,10 @@ describe("FleetList rendering", () => {
 describe("FleetList overlay lifecycle", () => {
   it("Enter on 'main' just deactivates (no overlay)", () => {
     const h = harness([makeRecord()]);
-    h.press(DOWN); // active, index 0 (main)
+    h.press(SHIFT_LEFT); // active, index 0 (main)
     h.press(ENTER);
     expect(h.overlayOpened()).toBe(false); // never opened an overlay
-    expect(h.render().some(l => l.includes("← for agents"))).toBe(true);
+    expect(h.render().some(l => l.includes("shift+left for agents"))).toBe(true);
   });
 
   it("keeps the cursor on the viewed agent after closing, even if the list reordered", async () => {
@@ -377,7 +413,7 @@ describe("FleetList overlay lifecycle", () => {
       makeRecord({ id: "a3", description: "three", session: fakeSession as any }),
     ];
     const h = harness(agents);
-    h.press(DOWN); // activate (main, idx 0)
+    h.press(SHIFT_LEFT); // activate (main, idx 0)
     h.press(DOWN); // a1 (idx 1)
     h.press(DOWN); // a2 (idx 2)
     h.press(ENTER); // open a2
@@ -392,7 +428,7 @@ describe("FleetList overlay lifecycle", () => {
   it("wires the viewer's steer composer to manager.steer with the agent id", () => {
     const agents = [makeRecord({ id: "live", description: "the one" })];
     const h = harness(agents);
-    h.press(DOWN);  // activate (main)
+    h.press(SHIFT_LEFT); // activate (main)
     h.press(DOWN);  // → the agent
     h.press(ENTER); // open the conversation viewer
 
@@ -408,7 +444,7 @@ describe("FleetList overlay lifecycle", () => {
   it("does NOT auto-close when the viewed agent finishes (final output stays readable)", () => {
     const agents = [makeRecord({ id: "live", description: "the one" })];
     const h = harness(agents);
-    h.press(DOWN); // active (main)
+    h.press(SHIFT_LEFT); // active (main)
     h.press(DOWN); // → the agent
     h.press(ENTER); // opens overlay
     expect(h.overlayOpened()).toBe(true);

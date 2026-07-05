@@ -13,7 +13,7 @@ https://github.com/user-attachments/assets/8685261b-9338-4fea-8dfe-1c590d5df543
 - **Claude Code look & feel** — same tool names, calling conventions, and UI patterns (`Agent`, `get_subagent_result`, `steer_subagent`) — feels native
 - **Parallel background agents** — spawn multiple agents that run concurrently with automatic queuing (configurable concurrency limit, default 4) and smart group join (consolidated notifications)
 - **Live widget UI** — persistent above-editor widget with animated spinners, live tool activity, token counts, and colored status icons. Configurable via `/agents → Settings → Widget`: `all` (every agent), `background` (default — hides foreground runs, which already render inline as the `Agent` tool result), or `off`
-- **FleetView** — Claude Code-style navigable list of `main` + every running subagent rendered below the editor (earliest-launched first). Press `↓` (or `←`) at an empty prompt to jump in, `↑`/`↓` to move the selection, `Enter` to open the selected agent's live, auto-updating conversation, `Esc` to return. Finished agents linger briefly before dropping out, and a viewer stays open through completion so you can read the final output. Toggle via `/agents → Settings → Fleet view`
+- **FleetView** — Claude Code-style navigable list of `main` + every running subagent rendered below the editor (earliest-launched first). Press `Shift+←` to focus the list, `↑`/`↓` to move the selection, `Enter` to open the selected agent's live, auto-updating conversation, and `Esc` or `Shift+←` to return. While focused, FleetView owns the keyboard: unrelated keys are consumed without leaking into the prompt. Finished agents linger briefly before dropping out, and a viewer stays open through completion so you can read the final output. Enable/disable via `/agents → Settings → Fleet view`
 - **Conversation viewer** — select any agent in `/agents` to open a live-scrolling overlay of its full conversation (auto-follows new content, scroll up to pause). Steer a running agent inline by pressing `Enter` to open a composer, typing, then `Enter` to send (`Esc` or an empty submit returns) — the message appears as a user message and redirects the agent after its current tool. Stop a still-running agent by pressing `x` (then `x` again to confirm) — both work for background agents too
 - **Custom agent types** — define agents in `.pi/agents/<name>.md` or `.agents/agents/<name>.md` (project) or globally, with YAML frontmatter: custom system prompts, model selection, thinking levels, tool restrictions
 - **Mid-run steering** — inject messages into running agents to redirect their work without restarting
@@ -116,15 +116,14 @@ The token field is annotated with two optional signals inside parens:
 While subagents are running, a Claude Code-style navigable list renders **below** the editor:
 
 ```
-  esc to interrupt · ← for agents · ↓ to manage
-
-  ⏺ main
-  ◯ general-purpose  Sleep then report 1                                11s · ↓ 13.1k tokens
-  ◯ general-purpose  Sleep then report 2                                11s · ↓ 13.1k tokens
-                                                                                   ↓ 3 more
+████ FLEET LIVE · ↑↓ select · enter view · esc/shift+left back
+████   ⏺ main
+████   ◯ general-purpose  Sleep then report 1                            11s · ↓ 13.1k tokens
+████   ◯ general-purpose  Sleep then report 2                            11s · ↓ 13.1k tokens
+                                                                               ↓ 3 more
 ```
 
-The list is ordered earliest-launched first, and only shows agents you can actually open (pending/queued agents with no session yet appear once they start). At an **empty prompt**, press `↓` (or `←`) to move focus from the prompt into the list — the selected row is marked `⏺`, the rest `◯`. `↑`/`↓` move the selection, `Enter` opens the selected agent's live conversation overlay (it auto-updates as the agent works), and `Esc` (or `↑` above `main`) returns to the prompt. Selecting `main` returns to the normal view. Inside the overlay, press `Enter` to steer the running agent — type a message and `Enter` to send it (`Esc` or an empty submit returns), and it redirects the agent the same way the `steer_subagent` tool does. A viewer stays open when its agent finishes so you can read the final output, and finished agents linger in the list for a few seconds before dropping out. Typing anything at a non-empty prompt behaves normally — the list only captures arrow keys when the prompt is empty. Disable it entirely via `/agents → Settings → Fleet view`.
+The list is ordered earliest-launched first, and only shows agents you can actually open (pending/queued agents with no session yet appear once they start). Press `Shift+←` to focus FleetView — the selected row is marked `⏺`, the rest `◯`. `↑`/`↓` move the selection and clamp at the top/bottom, `Enter` opens the selected agent's live conversation overlay (it auto-updates as the agent works), and `Esc` or `Shift+←` returns to the prompt. Selecting `main` returns to the normal view. While focused, FleetView owns the keyboard: unrelated keys like `/`, letters, or plain horizontal arrows are consumed as no-ops instead of falling through to the editor. When another menu/dialog owns focus, FleetView may remain visible but is keyboard-dead and consumes nothing. Inside the overlay, press `Enter` to steer the running agent — type a message and `Enter` to send it (`Esc` or an empty submit returns), and it redirects the agent the same way the `steer_subagent` tool does. A viewer stays open when its agent finishes so you can read the final output, and finished agents linger in the list for a few seconds before dropping out. Disable it entirely via `/agents → Settings → Fleet view`.
 
 Individual agent results render Claude Code-style in the conversation:
 
