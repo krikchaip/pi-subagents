@@ -13,7 +13,7 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { defineTool, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, getAgentDir, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
-import { Container, type SettingItem, Text } from "@earendil-works/pi-tui";
+import { Container, type SettingItem } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { AgentManager } from "./agent-manager.js";
 import { getAgentConversation, getDefaultMaxTurns, getGraceTurns, normalizeMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns, steerAgent } from "./agent-runner.js";
@@ -56,6 +56,7 @@ import {
 import { FleetList, type FleetUICtx } from "./ui/fleet-list.js";
 import { PolishedSettingsList } from "./ui/polished-settings-list.js";
 import { showSchedulesMenu } from "./ui/schedule-menu.js";
+import { ToolResultText } from "./ui/tool-result-text.js";
 import { addUsage, getLifetimeTotal, getSessionContextPercent, type LifetimeUsage } from "./usage.js";
 
 // ---- Shared helpers ----
@@ -72,8 +73,8 @@ export function renderRunningAgentStatus(
   theme: Pick<Theme, "fg">,
 ): Container {
   const container = new Container();
-  container.addChild(new Text(theme.fg("accent", frame) + (statsText ? " " + statsText : ""), 0, 0));
-  container.addChild(new Text(theme.fg("dim", `  ⎿  ${activity}`), 0, 0));
+  container.addChild(new ToolResultText(theme.fg("accent", frame) + (statsText ? " " + statsText : "")));
+  container.addChild(new ToolResultText(theme.fg("dim", `  ⎿  ${activity}`)));
   return container;
 }
 
@@ -264,7 +265,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       const all = [d, ...(d.others ?? [])];
-      return new Text(all.map(renderOne).join("\n"), 0, 0);
+      return new ToolResultText(all.map(renderOne).join("\n"));
     }
   );
 
@@ -1060,14 +1061,14 @@ Terse command-style prompts produce shallow, generic work.
     renderCall(args, theme) {
       const displayName = args.subagent_type ? getDisplayName(args.subagent_type) : "Agent";
       const desc = args.description ?? "";
-      return new Text("▸ " + theme.fg("toolTitle", theme.bold(displayName)) + (desc ? "  " + theme.fg("muted", desc) : ""), 0, 0);
+      return new ToolResultText(theme.fg("toolTitle", theme.bold(displayName)) + (desc ? "  " + theme.fg("muted", desc) : ""));
     },
 
     renderResult(result, { expanded, isPartial }, theme) {
       const details = result.details as AgentDetails | undefined;
       if (!details) {
         const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-        return new Text(text, 0, 0);
+        return new ToolResultText(text);
       }
 
       // Helper: build "haiku · thinking: high · ↻5≤30 · 3 tool uses · 33.8k tokens" stats string
@@ -1092,7 +1093,7 @@ Terse command-style prompts produce shallow, generic work.
 
       // ---- Background agent launched ----
       if (details.status === "background") {
-        return new Text(theme.fg("dim", `  ⎿  Running in background (ID: ${details.agentId})`), 0, 0);
+        return new ToolResultText(theme.fg("dim", `  ⎿  Running in background (ID: ${details.agentId})`));
       }
 
       // ---- Completed / Steered ----
@@ -1119,7 +1120,7 @@ Terse command-style prompts produce shallow, generic work.
           const doneText = isSteered ? "Wrapped up (turn limit)" : "Done";
           line += "\n" + theme.fg("dim", `  ⎿  ${doneText}`);
         }
-        return new Text(line, 0, 0);
+        return new ToolResultText(line);
       }
 
       // ---- Stopped (user-initiated abort) ----
@@ -1127,7 +1128,7 @@ Terse command-style prompts produce shallow, generic work.
         const s = stats(details);
         let line = theme.fg("dim", "■") + (s ? " " + s : "");
         line += "\n" + theme.fg("dim", "  ⎿  Stopped");
-        return new Text(line, 0, 0);
+        return new ToolResultText(line);
       }
 
       // ---- Error / Aborted (hard max_turns) ----
@@ -1140,7 +1141,7 @@ Terse command-style prompts produce shallow, generic work.
         line += "\n" + theme.fg("warning", "  ⎿  Aborted (max turns exceeded)");
       }
 
-      return new Text(line, 0, 0);
+      return new ToolResultText(line);
     },
 
     // ---- Execute ----
@@ -1529,6 +1530,13 @@ Terse command-style prompts produce shallow, generic work.
         }),
       ),
     }),
+    renderCall(args, theme) {
+      return new ToolResultText(theme.fg("toolTitle", theme.bold("Get Agent Result")) + (args.agent_id ? "  " + theme.fg("muted", args.agent_id) : ""));
+    },
+    renderResult(result) {
+      const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+      return new ToolResultText(text);
+    },
     execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
       const record = manager.getRecord(params.agent_id);
       if (!record) {
@@ -1608,6 +1616,13 @@ Terse command-style prompts produce shallow, generic work.
         description: "The steering message to send. This will appear as a user message in the agent's conversation.",
       }),
     }),
+    renderCall(args, theme) {
+      return new ToolResultText(theme.fg("toolTitle", theme.bold("Steer Agent")) + (args.agent_id ? "  " + theme.fg("muted", args.agent_id) : ""));
+    },
+    renderResult(result) {
+      const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+      return new ToolResultText(text);
+    },
     execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
       const record = manager.getRecord(params.agent_id);
       if (!record) {
