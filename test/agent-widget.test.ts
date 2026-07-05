@@ -40,6 +40,10 @@ describe("formatSessionTokens", () => {
       "\u001b[35m1.2k token (\u001b[33m70%\u001b[39m\u001b[35m)\u001b[39m",
     );
   });
+
+  it("styles base token text without wrapping colored annotations", () => {
+    expect(formatSessionTokens(1234, 88, theme, 0, "dim")).toBe("<dim>1.2k token</dim><dim> (</dim><error>88%</error><dim>)</dim>");
+  });
 });
 
 describe("renderRunningAgentStatus", () => {
@@ -120,6 +124,13 @@ describe("AgentWidget", () => {
     const lines = renderLines(manager, "background", () => "background");
     expect(lines).toContain("Agents");
     expect(lines).toContain("background description");
+  });
+
+  it("adds one leading space to every rendered widget line", () => {
+    const manager = { listAgents: () => [makeRecord("background", { isBackground: true })] };
+    const lines = renderLines(manager, "background", () => "background").split("\n");
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines.every(line => line.startsWith(" "))).toBe(true);
   });
 
   // 'background' excludes only agents *known* to be foreground; one with no

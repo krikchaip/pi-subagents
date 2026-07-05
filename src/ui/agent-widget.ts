@@ -119,8 +119,9 @@ export function formatSessionTokens(
   percent: number | null,
   theme: Theme,
   compactions = 0,
+  baseColor?: string,
 ): string {
-  const tokenStr = formatTokens(tokens);
+  const tokenStr = baseColor ? theme.fg(baseColor, formatTokens(tokens)) : formatTokens(tokens);
   const annot: string[] = [];
   if (percent !== null) {
     const color = percent >= 85 ? "error" : percent >= 70 ? "warning" : "dim";
@@ -130,7 +131,8 @@ export function formatSessionTokens(
     annot.push(theme.fg("dim", `⇊${compactions}`));
   }
   if (annot.length === 0) return tokenStr;
-  return `${tokenStr} (${annot.join(" · ")})`;
+  if (!baseColor) return `${tokenStr} (${annot.join(" · ")})`;
+  return `${tokenStr}${theme.fg(baseColor, " (")}${annot.join(theme.fg(baseColor, " · "))}${theme.fg(baseColor, ")")}`;
 }
 
 /** Format turn count with optional max limit: "↻5≤30" or "↻5". */
@@ -362,7 +364,7 @@ export class AgentWidget {
     if (!hasActive && !hasFinished) return [];
 
     const w = tui.terminal.columns;
-    const truncate = (line: string) => truncateToWidth(line, w);
+    const truncate = (line: string) => " " + truncateToWidth(line, Math.max(0, w - 1));
     const headingColor = hasActive ? "accent" : "dim";
     const headingIcon = hasActive ? "●" : "○";
     const frame = SPINNER[this.widgetFrame % SPINNER.length];
@@ -386,19 +388,19 @@ export class AgentWidget {
       const toolUses = bg?.toolUses ?? a.toolUses;
       const tokens = getLifetimeTotal(bg?.lifetimeUsage);
       const contextPercent = getSessionContextPercent(bg?.session);
-      const tokenText = tokens > 0 ? formatSessionTokens(tokens, contextPercent, theme, a.compactionCount) : "";
+      const tokenText = tokens > 0 ? formatSessionTokens(tokens, contextPercent, theme, a.compactionCount, "dim") : "";
 
       const parts: string[] = [];
-      if (bg) parts.push(formatTurns(bg.turnCount, bg.maxTurns));
-      if (toolUses > 0) parts.push(`${toolUses} tool use${toolUses === 1 ? "" : "s"}`);
+      if (bg) parts.push(theme.fg("dim", formatTurns(bg.turnCount, bg.maxTurns)));
+      if (toolUses > 0) parts.push(theme.fg("dim", `${toolUses} tool use${toolUses === 1 ? "" : "s"}`));
       if (tokenText) parts.push(tokenText);
-      parts.push(elapsed);
-      const statsText = parts.join(" · ");
+      parts.push(theme.fg("dim", elapsed));
+      const statsText = parts.join(theme.fg("dim", " · "));
 
       const activity = bg ? describeActivity(bg.activeTools, bg.responseText) : "thinking…";
 
       runningLines.push([
-        truncate(theme.fg("dim", "├─") + ` ${theme.fg("accent", frame)} ${theme.bold(name)}${modeTag}  ${theme.fg("muted", a.description)} ${theme.fg("dim", "·")} ${fgPreservingNestedStyles(theme, "dim", statsText)}`),
+        truncate(theme.fg("dim", "├─") + ` ${theme.fg("accent", frame)} ${theme.bold(name)}${modeTag}  ${theme.fg("muted", a.description)} ${theme.fg("dim", "·")} ${statsText}`),
         truncate(theme.fg("dim", "│  ") + theme.fg("dim", `  ⎿  ${activity}`)),
       ]);
     }
