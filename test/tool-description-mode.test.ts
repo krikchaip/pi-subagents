@@ -176,12 +176,24 @@ describe("toolDescriptionMode", () => {
     const tools = setup({ toolDescriptionMode: "custom" }, () => {
       writeFileSync(
         join(tmpDir, ".pi", "agent-tool-description.md"),
-        "A {{typeList}} B {{compactTypeList}} C {{agentDir}} D {{scheduleGuideline}} E",
+        "A {{typeList}} B {{compactTypeList}} C {{structuredTypeList}} D {{agentDir}} E {{scheduleGuideline}} F",
       );
     });
     const desc: string = tools.get("Agent").description;
     expect(desc).not.toContain("{{");
     expect(desc).not.toContain("}}");
+  });
+
+  it("{{structuredTypeList}} renders raw XML-ish subagent descriptions", () => {
+    const tools = setup({ toolDescriptionMode: "custom" }, () => {
+      writeFileSync(join(tmpDir, ".pi", "agent-tool-description.md"), "{{structuredTypeList}}");
+    });
+    const desc: string = tools.get("Agent").description;
+    expect(desc).toContain("<available-subagents>");
+    expect(desc).toContain('<subagent type="Explore">');
+    expect(desc).toContain("very thorough");
+    expect(desc).not.toContain("Tools:");
+    expect(desc).not.toContain("claude-haiku");
   });
 
   it("the shipped example template renders byte-identical to the full description", async () => {

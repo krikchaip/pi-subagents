@@ -83,6 +83,13 @@ export interface SubagentsSettings {
    * widget).
    */
   widgetMode?: WidgetMode;
+  /**
+   * When true, the main agent is prompted as an orchestrator: understand the
+   * whole request, plan, and delegate suitable slices by default. Defaults to
+   * false, where subagents are encouraged only when their descriptions fit the
+   * work currently being done.
+   */
+  orchestrator?: boolean;
 }
 
 export type ToolDescriptionMode = "full" | "compact" | "custom";
@@ -99,6 +106,7 @@ export interface SettingsAppliers {
   setToolDescriptionMode: (mode: ToolDescriptionMode) => void;
   setFleetView: (b: boolean) => void;
   setWidgetMode: (mode: WidgetMode) => void;
+  setOrchestrator: (enabled: boolean) => void;
 }
 
 /** Emit callback — a subset of `pi.events.emit` to keep helpers testable. */
@@ -162,6 +170,9 @@ function sanitize(raw: unknown): SubagentsSettings {
   if (typeof r.widgetMode === "string" && VALID_WIDGET_MODES.has(r.widgetMode)) {
     out.widgetMode = r.widgetMode as WidgetMode;
   }
+  if (typeof r.orchestrator === "boolean") {
+    out.orchestrator = r.orchestrator;
+  }
   return out;
 }
 
@@ -222,6 +233,7 @@ export function applySettings(s: SubagentsSettings, appliers: SettingsAppliers):
   if (s.toolDescriptionMode) appliers.setToolDescriptionMode(s.toolDescriptionMode);
   if (typeof s.fleetView === "boolean") appliers.setFleetView(s.fleetView);
   if (s.widgetMode) appliers.setWidgetMode(s.widgetMode);
+  if (typeof s.orchestrator === "boolean") appliers.setOrchestrator(s.orchestrator);
 }
 
 /**

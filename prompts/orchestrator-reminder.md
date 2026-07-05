@@ -1,0 +1,1 @@
+Orchestrator mode is active for this turn. First understand the request and decide the approach, then delegate suitable work to subagents instead of doing it all yourself. Work directly only when direct work is clearly better under the subagent delegation guidance.

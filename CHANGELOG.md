@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Orchestrator mode** — opt-in prompt guidance for the main agent to plan and delegate suitable work by default, backed by markdown prompt templates and a footer status indicator while active. Transient reminders are injected only before real user input and are not persisted to the session file; extension follow-up notifications such as background subagent completions do not receive the reminder.
 - **Project custom agents are also discovered from `.agents/agents/<name>.md`** ([#133](https://github.com/tintinweb/pi-subagents/pull/133) — thanks [@wenerme](https://github.com/wenerme); closes [#132](https://github.com/tintinweb/pi-subagents/issues/132)). Projects that keep their agent assets in the shared cross-tool `.agents` workspace (the same convention this extension already reads for `.agents/skills/`) can now define subagents there instead of duplicating files into `.pi/agents/`. Discovery precedence is `global < .agents/agents < .pi/agents`: on a name clash between the two project locations, **`.pi/agents/` wins** — `.pi` remains the project authority, and the `/agents` create/eject/disable flows keep writing there; `.agents/agents/` is a read location only.
 
 ### Changed

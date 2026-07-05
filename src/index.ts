@@ -25,6 +25,12 @@ import { GroupJoinManager } from "./group-join.js";
 import { resolveAgentInvocationConfig, resolveJoinMode } from "./invocation-config.js";
 import { type ModelRegistry, resolveModel } from "./model-resolver.js";
 import { createOutputFilePath, streamToOutputFile, writeInitialEntry } from "./output-file.js";
+import {
+  SUBAGENT_DELEGATION_SECTION_TAG,
+  SUBAGENT_ORCHESTRATOR_REMINDER_TAG,
+  SUBAGENT_ORCHESTRATOR_SECTION_TAG,
+  stripSubagentDelegationSections,
+} from "./prompts.js";
 import { SubagentScheduler } from "./schedule.js";
 import { resolveStorePath, ScheduleStore } from "./schedule-store.js";
 import { applyAndEmitLoaded, type SubagentsSettings, saveAndEmitChanged, type ToolDescriptionMode } from "./settings.js";
@@ -487,6 +493,7 @@ export default function (pi: ExtensionAPI) {
   // Capture ctx from session_start for RPC spawn handler + start the scheduler.
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
+    updateOrchestratorStatus(ctx);
     await manager.clearCompleted(true, "new");
     if (isSchedulingEnabled() && !scheduler.isActive()) startScheduler(ctx);
   });
@@ -509,6 +516,7 @@ export default function (pi: ExtensionAPI) {
   // On shutdown, abort all agents immediately and clean up.
   // If the session is going down, there's nothing left to consume agent results.
   pi.on("session_shutdown", async () => {
+    clearOrchestratorStatus();
     unsubSpawnRpc();
     unsubStopRpc();
     unsubPingRpc();
@@ -587,6 +595,27 @@ export default function (pi: ExtensionAPI) {
   let toolDescriptionMode: ToolDescriptionMode = "full";
   function getToolDescriptionMode(): ToolDescriptionMode { return toolDescriptionMode; }
   function setToolDescriptionMode(mode: ToolDescriptionMode): void { toolDescriptionMode = mode; }
+
+  // ---- Orchestrator mode ----
+  // Off: encourage delegation when an available subagent description fits the work.
+  // On: prompt the main agent as an orchestrator that plans and delegates by default.
+  const ORCHESTRATOR_STATUS_KEY = "subagents-orchestrator";
+  let orchestratorEnabled = false;
+  function isOrchestratorEnabled(): boolean { return orchestratorEnabled; }
+  function clearOrchestratorStatus(ctx: ExtensionContext | undefined = currentCtx): void {
+    const ui = (ctx as any)?.ui;
+    if (typeof ui?.setStatus === "function") ui.setStatus(ORCHESTRATOR_STATUS_KEY, undefined);
+  }
+  function updateOrchestratorStatus(ctx: ExtensionContext | undefined = currentCtx): void {
+    const ui = (ctx as any)?.ui;
+    if (typeof ui?.setStatus === "function") {
+      ui.setStatus(ORCHESTRATOR_STATUS_KEY, orchestratorEnabled ? "🧠 Orchestrator ON" : undefined);
+    }
+  }
+  function setOrchestratorEnabled(enabled: boolean): void {
+    orchestratorEnabled = enabled;
+    updateOrchestratorStatus();
+  }
 
   // ---- Batch tracking for smart join mode ----
   // Collects background agent IDs spawned in the current turn for smart grouping.
@@ -673,6 +702,26 @@ export default function (pi: ExtensionAPI) {
       return `- ${name}: ${firstSentence(cfg?.description ?? name)} (Tools: ${formatToolsSuffix(cfg)})`;
     }).join("\n");
 
+  function escapeXmlText(text: string): string {
+    return text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
+
+  function escapeXmlAttribute(text: string): string {
+    return escapeXmlText(text).replace(/"/g, "&quot;");
+  }
+
+  /** Structured type list for system-prompt guidance: raw descriptions only. */
+  const buildStructuredTypeListText = () => {
+    const items = getAvailableTypes().map((name) => {
+      const cfg = getAgentConfig(name);
+      return `  <subagent type="${escapeXmlAttribute(name)}">\n${escapeXmlText(cfg?.description ?? name)}\n  </subagent>`;
+    });
+    return `<available-subagents>\n${items.join("\n")}\n</available-subagents>`;
+  };
+
   /** Derive a short model label from a model string. */
   function getModelLabelFromConfig(model: string): string {
     // Strip provider prefix (e.g. "anthropic/claude-sonnet-4-6" → "claude-sonnet-4-6")
@@ -680,6 +729,24 @@ export default function (pi: ExtensionAPI) {
     // Strip trailing date suffix (e.g. "claude-haiku-4-5-20251001" → "claude-haiku-4-5")
     return name.replace(/-\d{8}$/, "");
   }
+
+  const templateVars = (): Record<string, () => string> => ({
+    typeList: buildTypeListText,
+    compactTypeList: buildCompactTypeListText,
+    structuredTypeList: buildStructuredTypeListText,
+    agentDir: getAgentDir,
+    scheduleGuideline: () => scheduleGuideline,
+  });
+
+  const renderTemplate = (template: string, sourceLabel: string): string => {
+    const vars = templateVars();
+    // Replacement callback (not a string) — agent descriptions may contain `$&` etc.
+    return template.replace(/\{\{(\w+)\}\}/g, (raw, name: string) => {
+      if (vars[name]) return vars[name]();
+      console.warn(`[pi-subagents] ${sourceLabel}: unknown placeholder ${raw} left as-is`);
+      return raw;
+    });
+  };
 
   // Apply persisted settings on startup and emit `subagents:settings_loaded`.
   // Global + project merged; missing → defaults; corrupt file emits a warning
@@ -696,6 +763,7 @@ export default function (pi: ExtensionAPI) {
       setToolDescriptionMode: setToolDescriptionMode,
       setFleetView: setFleetViewEnabled,
       setWidgetMode: setWidgetMode,
+      setOrchestrator: setOrchestratorEnabled,
     },
     (event, payload) => pi.events.emit(event, payload),
   );
@@ -723,6 +791,117 @@ export default function (pi: ExtensionAPI) {
   const scheduleGuideline = isSchedulingEnabled()
     ? `\n- Use \`schedule\` only when the user explicitly asked for scheduled / recurring / delayed execution (e.g. "every Monday", "in an hour"). Don't auto-schedule from vague intent like "monitor X" — run once now or ask.`
     : "";
+
+  type PromptSpec = { url: URL; label: string; tag: string };
+  const promptSpecs = {
+    delegation: {
+      url: new URL("../prompts/delegation.md", import.meta.url),
+      label: "prompts/delegation.md",
+      tag: SUBAGENT_DELEGATION_SECTION_TAG,
+    },
+    orchestrator: {
+      url: new URL("../prompts/orchestrator.md", import.meta.url),
+      label: "prompts/orchestrator.md",
+      tag: SUBAGENT_ORCHESTRATOR_SECTION_TAG,
+    },
+    reminder: {
+      url: new URL("../prompts/orchestrator-reminder.md", import.meta.url),
+      label: "prompts/orchestrator-reminder.md",
+      tag: SUBAGENT_ORCHESTRATOR_REMINDER_TAG,
+    },
+  } satisfies Record<string, PromptSpec>;
+
+  const warnedPromptLoads = new Set<string>();
+
+  function notifyPromptLoadFailure(ctx: ExtensionContext, spec: PromptSpec, reason: string): void {
+    if (warnedPromptLoads.has(spec.label)) return;
+    warnedPromptLoads.add(spec.label);
+    const message = `[pi-subagents] ${spec.label} unavailable; skipping prompt block: ${reason}`;
+    const ui = (ctx as any).ui;
+    if ((ctx as any).hasUI !== false && typeof ui?.notify === "function") {
+      ui.notify(message, "warning");
+    } else {
+      console.warn(message);
+    }
+  }
+
+  function loadPromptBlock(
+    ctx: ExtensionContext,
+    spec: PromptSpec,
+    openNewlines = 1,
+    beforeCloseNewlines = 1,
+    closeNewlines = 0,
+  ): string | undefined {
+    try {
+      if (!existsSync(spec.url)) {
+        notifyPromptLoadFailure(ctx, spec, "file not found");
+        return undefined;
+      }
+      const text = readFileSync(spec.url, "utf-8").trim();
+      if (!text) {
+        notifyPromptLoadFailure(ctx, spec, "file is empty");
+        return undefined;
+      }
+      const rendered = renderTemplate(text, spec.label).trim();
+      if (!rendered) return undefined;
+      return `<${spec.tag}>${"\n".repeat(openNewlines)}${rendered}${"\n".repeat(beforeCloseNewlines)}</${spec.tag}>${"\n".repeat(closeNewlines)}`;
+    } catch (err) {
+      notifyPromptLoadFailure(ctx, spec, err instanceof Error ? err.message : String(err));
+      return undefined;
+    }
+  }
+
+  function systemPromptBelongsToSubagent(systemPrompt: string): boolean {
+    return systemPrompt.includes("<active_agent ");
+  }
+
+  let pendingReminderForUserInput = false;
+
+  pi.on("input", (event) => {
+    pendingReminderForUserInput = event.source !== "extension" && event.streamingBehavior !== "steer";
+    return { action: "continue" as const };
+  });
+
+  pi.on("before_agent_start", (event, ctx) => {
+    const basePrompt = stripSubagentDelegationSections(event.systemPrompt);
+    if (systemPromptBelongsToSubagent(basePrompt)) {
+      return basePrompt === event.systemPrompt ? undefined : { systemPrompt: basePrompt };
+    }
+
+    const spec = isOrchestratorEnabled() ? promptSpecs.orchestrator : promptSpecs.delegation;
+    const block = loadPromptBlock(ctx, spec, 2, 2);
+    if (!block) return basePrompt === event.systemPrompt ? undefined : { systemPrompt: basePrompt };
+    return { systemPrompt: `${basePrompt}\n\n${block}` };
+  });
+
+  pi.on("context", (event, ctx) => {
+    const shouldInjectReminder = pendingReminderForUserInput;
+    pendingReminderForUserInput = false;
+
+    if (!isOrchestratorEnabled() || !shouldInjectReminder) return undefined;
+    if (systemPromptBelongsToSubagent(ctx.getSystemPrompt())) return undefined;
+
+    const insertionIndex = event.messages.length - 1;
+    const lastMessage = event.messages[insertionIndex] as any;
+    if (insertionIndex < 0 || lastMessage?.role !== "user") return undefined;
+
+    const block = loadPromptBlock(ctx, promptSpecs.reminder);
+    if (!block) return undefined;
+
+    return {
+      messages: [
+        ...event.messages.slice(0, insertionIndex),
+        {
+          role: "custom" as const,
+          customType: "pi-subagents-orchestrator-reminder",
+          content: block,
+          display: false,
+          timestamp: Date.now(),
+        },
+        ...event.messages.slice(insertionIndex),
+      ],
+    };
+  });
 
   // Compact Agent tool description (#91, `toolDescriptionMode: "compact"`) —
   // the same load-bearing facts as the full version at ~75% fewer tokens, for
@@ -786,20 +965,7 @@ Terse command-style prompts produce shallow, generic work.
   // dynamic parts. Project file wins over global; missing/empty falls back to
   // "full" (a stale fallback beats a blank tool description). Only the prose
   // is customizable — the parameter schema stays code-owned.
-  const renderToolDescriptionTemplate = (template: string): string => {
-    const vars: Record<string, () => string> = {
-      typeList: buildTypeListText,
-      compactTypeList: buildCompactTypeListText,
-      agentDir: getAgentDir,
-      scheduleGuideline: () => scheduleGuideline,
-    };
-    // Replacement callback (not a string) — agent descriptions may contain `$&` etc.
-    return template.replace(/\{\{(\w+)\}\}/g, (raw, name: string) => {
-      if (vars[name]) return vars[name]();
-      console.warn(`[pi-subagents] agent-tool-description.md: unknown placeholder ${raw} left as-is`);
-      return raw;
-    });
-  };
+  const renderToolDescriptionTemplate = (template: string): string => renderTemplate(template, "agent-tool-description.md");
 
   const loadCustomToolDescription = (): string | undefined => {
     for (const path of [
@@ -834,12 +1000,6 @@ Terse command-style prompts produce shallow, generic work.
     label: "Agent",
     description: agentToolDescription,
     promptSnippet: "Launch autonomous sub-agents for complex multi-step tasks",
-    promptGuidelines: [
-      "Use Agent with specialized agents when the task matches an agent type's description. Subagents are valuable for parallelizing independent queries or for protecting the main context window from excessive results, but should not be used excessively when not needed. Importantly, avoid duplicating work that subagents are already doing — if you delegate research to a subagent, do not also perform the same searches yourself.",
-      "For broad codebase exploration or research, spawn Agent with an appropriate subagent_type (e.g. Explore). Otherwise use direct tools (read, grep, find) when the target is already known.",
-      "When an agent runs in the background, you will be notified on completion — do not poll or sleep waiting for it. Continue with other work instead.",
-      "Trust but verify: an agent's summary describes intent, not outcome. When an agent writes or edits code, check the actual changes before reporting work as done.",
-    ],
     parameters: Type.Object({
       prompt: Type.String({
         description: "The task for the agent to perform.",
@@ -2053,6 +2213,7 @@ ${systemPrompt}
       toolDescriptionMode: getToolDescriptionMode(),
       fleetView: isFleetViewEnabled(),
       widgetMode: getWidgetMode(),
+      orchestrator: isOrchestratorEnabled(),
     };
   }
 
@@ -2106,6 +2267,13 @@ ${systemPrompt}
           description: "Validate subagent models against scoped models (/scoped-models)",
           currentValue: isScopeModelsEnabled() ? "on" : "off",
           values: ["on", "off"],
+        },
+        {
+          id: "orchestrator",
+          label: "Orchestrator",
+          description: "off = use subagents when their descriptions fit the work; on = plan and delegate by default",
+          currentValue: isOrchestratorEnabled() ? "on" : "off",
+          values: ["off", "on"],
         },
         {
           id: "disableDefaultAgents",
@@ -2179,6 +2347,10 @@ ${systemPrompt}
         const enabled = value === "on";
         setScopeModelsEnabled(enabled);
         notifyApplied(ctx, `Scope models ${enabled ? "enabled" : "disabled"}`);
+      } else if (id === "orchestrator") {
+        const enabled = value === "on";
+        setOrchestratorEnabled(enabled);
+        notifyApplied(ctx, `Orchestrator ${enabled ? "enabled" : "disabled"}`);
       } else if (id === "disableDefaultAgents") {
         const enabled = value === "on";
         setDisableDefaultAgents(enabled);

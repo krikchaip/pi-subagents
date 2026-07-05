@@ -90,6 +90,7 @@ describe("settings persistence", () => {
       defaultJoinMode: "smart" as const,
       schedulingEnabled: false,
       toolDescriptionMode: "compact" as const,
+      orchestrator: true,
     };
     saveSettings(settings, projectDir);
     expect(loadSettings(projectDir)).toEqual(settings);
@@ -105,6 +106,15 @@ describe("settings persistence", () => {
     // Absence — caller's "use default" signal — must not become a stored false.
     saveSettings({}, projectDir);
     expect(loadSettings(projectDir)).toEqual({});
+  });
+
+  it("round-trips orchestrator (true and false); keeps boolean, drops non-boolean", () => {
+    saveSettings({ orchestrator: true }, projectDir);
+    expect(loadSettings(projectDir)).toEqual({ orchestrator: true });
+    saveSettings({ orchestrator: false }, projectDir);
+    expect(loadSettings(projectDir)).toEqual({ orchestrator: false });
+    writeProject({ orchestrator: "on" } as any);
+    expect(loadSettings(projectDir)).toEqual({}); // non-boolean dropped
   });
 
   it("round-trips fleetView (true and false); keeps boolean, drops non-boolean", () => {
@@ -367,6 +377,7 @@ describe("settings persistence", () => {
         setToolDescriptionMode: vi.fn(),
         setFleetView: vi.fn(),
         setWidgetMode: vi.fn(),
+        setOrchestrator: vi.fn(),
       };
     });
 
@@ -380,6 +391,7 @@ describe("settings persistence", () => {
       expect(appliers.setScopeModels).not.toHaveBeenCalled();
       expect(appliers.setDisableDefaultAgents).not.toHaveBeenCalled();
       expect(appliers.setToolDescriptionMode).not.toHaveBeenCalled();
+      expect(appliers.setOrchestrator).not.toHaveBeenCalled();
     });
 
     it("applies only the fields that are present", () => {
@@ -405,6 +417,7 @@ describe("settings persistence", () => {
           toolDescriptionMode: "compact",
           fleetView: false,
           widgetMode: "off",
+          orchestrator: true,
         },
         appliers,
       );
@@ -418,6 +431,7 @@ describe("settings persistence", () => {
       expect(appliers.setToolDescriptionMode).toHaveBeenCalledWith("compact");
       expect(appliers.setFleetView).toHaveBeenCalledWith(false);
       expect(appliers.setWidgetMode).toHaveBeenCalledWith("off");
+      expect(appliers.setOrchestrator).toHaveBeenCalledWith(true);
     });
 
     it("applies widgetMode; skips it when absent", () => {
@@ -437,6 +451,11 @@ describe("settings persistence", () => {
     it("applies scopeModels: false", () => {
       applySettings({ scopeModels: false }, appliers);
       expect(appliers.setScopeModels).toHaveBeenCalledWith(false);
+    });
+
+    it("applies orchestrator: false", () => {
+      applySettings({ orchestrator: false }, appliers);
+      expect(appliers.setOrchestrator).toHaveBeenCalledWith(false);
     });
 
     it("applies disableDefaultAgents: false", () => {
@@ -507,6 +526,7 @@ describe("settings persistence", () => {
         setToolDescriptionMode: vi.fn(),
         setFleetView: vi.fn(),
         setWidgetMode: vi.fn(),
+        setOrchestrator: vi.fn(),
       };
     });
 

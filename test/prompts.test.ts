@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { getAgentConfig, registerAgents } from "../src/agent-types.js";
-import { buildAgentPrompt } from "../src/prompts.js";
+import {
+  buildAgentPrompt,
+  SUBAGENT_DELEGATION_SECTION_TAG,
+  SUBAGENT_ORCHESTRATOR_REMINDER_TAG,
+  SUBAGENT_ORCHESTRATOR_SECTION_TAG,
+  stripSubagentDelegationSections,
+} from "../src/prompts.js";
 import type { AgentConfig, EnvInfo } from "../src/types.js";
 
 const env: EnvInfo = {
@@ -23,6 +29,27 @@ beforeEach(() => {
 function getDefaultConfig(name: string): AgentConfig {
   return getAgentConfig(name)!;
 }
+
+describe("stripSubagentDelegationSections", () => {
+  it("removes parent-only delegation and orchestrator tags", () => {
+    const prompt = [
+      "base prompt",
+      `<${SUBAGENT_DELEGATION_SECTION_TAG}>delegation</${SUBAGENT_DELEGATION_SECTION_TAG}>`,
+      "middle",
+      `<${SUBAGENT_ORCHESTRATOR_SECTION_TAG}>orchestrator</${SUBAGENT_ORCHESTRATOR_SECTION_TAG}>`,
+      `<${SUBAGENT_ORCHESTRATOR_REMINDER_TAG}>reminder</${SUBAGENT_ORCHESTRATOR_REMINDER_TAG}>`,
+      "tail",
+    ].join("\n\n");
+
+    const stripped = stripSubagentDelegationSections(prompt);
+    expect(stripped).toContain("base prompt");
+    expect(stripped).toContain("middle");
+    expect(stripped).toContain("tail");
+    expect(stripped).not.toContain("delegation");
+    expect(stripped).not.toContain("orchestrator");
+    expect(stripped).not.toContain("reminder");
+  });
+});
 
 describe("buildAgentPrompt", () => {
   it("includes cwd and git info", () => {

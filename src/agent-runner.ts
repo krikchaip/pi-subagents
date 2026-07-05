@@ -21,7 +21,7 @@ import { buildParentContext, extractText } from "./context.js";
 import { DEFAULT_AGENTS } from "./default-agents.js";
 import { detectEnv } from "./env.js";
 import { buildMemoryBlock, buildReadOnlyMemoryBlock } from "./memory.js";
-import { buildAgentPrompt, type PromptExtras } from "./prompts.js";
+import { buildAgentPrompt, type PromptExtras, stripSubagentDelegationSections } from "./prompts.js";
 import { preloadSkills } from "./skill-loader.js";
 import type { SubagentType, ThinkingLevel } from "./types.js";
 
@@ -312,8 +312,10 @@ export async function runAgent(
 
   const env = await detectEnv(options.pi, effectiveCwd);
 
-  // Get parent system prompt for append-mode agents
-  const parentSystemPrompt = ctx.getSystemPrompt();
+  // Get parent system prompt for append-mode agents. Parent-only delegation
+  // guidance is stripped so prompt_mode: append agents do not inherit main-agent
+  // orchestration pressure.
+  const parentSystemPrompt = stripSubagentDelegationSections(ctx.getSystemPrompt());
 
   // Build prompt extras (memory, skill preloading)
   const extras: PromptExtras = {};

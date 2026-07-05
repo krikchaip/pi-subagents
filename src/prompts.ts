@@ -4,6 +4,30 @@
 
 import type { AgentConfig, EnvInfo } from "./types.js";
 
+export const SUBAGENT_DELEGATION_SECTION_TAG = "pi-subagents-delegation";
+export const SUBAGENT_ORCHESTRATOR_SECTION_TAG = "pi-subagents-orchestrator";
+export const SUBAGENT_ORCHESTRATOR_REMINDER_TAG = "pi-subagents-orchestrator-reminder";
+
+const SUBAGENT_PARENT_ONLY_TAGS = [
+  SUBAGENT_DELEGATION_SECTION_TAG,
+  SUBAGENT_ORCHESTRATOR_SECTION_TAG,
+  SUBAGENT_ORCHESTRATOR_REMINDER_TAG,
+] as const;
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Remove parent-only delegation guidance before inheriting the parent prompt. */
+export function stripSubagentDelegationSections(prompt: string): string {
+  let stripped = prompt;
+  for (const tag of SUBAGENT_PARENT_ONLY_TAGS) {
+    const pattern = new RegExp(`\\n{0,2}<${escapeRegExp(tag)}>\\n{0,2}[\\s\\S]*?\\n?</${escapeRegExp(tag)}>\\n{0,2}`, "g");
+    stripped = stripped.replace(pattern, "");
+  }
+  return stripped.trimEnd();
+}
+
 /** Extra sections to inject into the system prompt (memory, skills, etc.). */
 export interface PromptExtras {
   /** Persistent memory content to inject (first 200 lines of MEMORY.md + instructions). */
