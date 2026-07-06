@@ -66,6 +66,16 @@ function textResult(msg: string, details?: AgentDetails) {
   return { content: [{ type: "text" as const, text: msg }], details: details as any };
 }
 
+function collapseGetAgentResultText(text: string): string {
+  const descriptionLineStart = text.startsWith("Description:")
+    ? 0
+    : text.indexOf("\nDescription:") + 1;
+  if (descriptionLineStart <= 0 && !text.startsWith("Description:")) return text;
+
+  const descriptionLineEnd = text.indexOf("\n", descriptionLineStart);
+  return descriptionLineEnd === -1 ? text : text.slice(0, descriptionLineEnd);
+}
+
 export function renderRunningAgentStatus(
   frame: string,
   statsText: string,
@@ -1533,9 +1543,9 @@ Terse command-style prompts produce shallow, generic work.
     renderCall(args, theme) {
       return new ToolResultText(theme.fg("toolTitle", theme.bold("Get Agent Result")) + (args.agent_id ? "  " + theme.fg("muted", args.agent_id) : ""));
     },
-    renderResult(result) {
+    renderResult(result, { expanded }) {
       const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-      return new ToolResultText(text);
+      return new ToolResultText(expanded ? text : collapseGetAgentResultText(text));
     },
     execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
       const record = manager.getRecord(params.agent_id);
