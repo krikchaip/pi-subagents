@@ -45,12 +45,14 @@ const EXCLUDED_TOOL_NAMES: string[] = Object.values(SUBAGENT_TOOL_NAMES);
  * Lowercased — extension names match case-insensitively so `extensions: [Mcp]`
  * resolves the same as `[mcp]`. Tool names within `ext:foo/bar` are not affected.
  * Directory extensions (`foo/index.ts`) resolve to the parent directory name;
+ * package entrypoints (`foo/src/index.ts`) resolve to the package directory;
  * single-file extensions to the basename minus `.ts`/`.js`.
  */
 export function extensionCanonicalName(extPath: string): string {
   const base = basename(extPath);
+  const parent = dirname(extPath);
   const name = base === "index.ts" || base === "index.js"
-    ? basename(dirname(extPath))
+    ? basename(parent) === "src" ? basename(dirname(parent)) : basename(parent)
     : base.replace(/\.(ts|js)$/, "");
   return name.toLowerCase();
 }

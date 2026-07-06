@@ -94,6 +94,7 @@ vi.mock("../src/env.js", () => ({
 
 vi.mock("../src/prompts.js", () => ({
   buildAgentPrompt: vi.fn(() => "system prompt"),
+  stripSubagentDelegationSections: vi.fn((prompt: string) => prompt),
 }));
 
 vi.mock("../src/memory.js", () => ({
@@ -673,6 +674,10 @@ describe("extensionCanonicalName", () => {
     expect(extensionCanonicalName("/x/foo/index.ts")).toBe("foo");
     expect(extensionCanonicalName("/x/foo/index.js")).toBe("foo");
   });
+  it("uses the package directory for package src/index entrypoints", () => {
+    expect(extensionCanonicalName("/tmp/extensions/npm/hash/node_modules/@gotgenes/pi-permission-system/src/index.ts")).toBe("pi-permission-system");
+    expect(extensionCanonicalName("/tmp/extensions/npm/hash/node_modules/pi-web-access/src/index.ts")).toBe("pi-web-access");
+  });
   it("lowercases the result for case-insensitive matching", () => {
     expect(extensionCanonicalName("/x/MCP.ts")).toBe("mcp");
     expect(extensionCanonicalName("/x/MyExt.js")).toBe("myext");
@@ -761,6 +766,22 @@ describe("agent-runner extension allowlist", () => {
     expect(tools).toContain("mcp");
     expect(tools).toContain("mcp_call");
     expect(tools).not.toContain("other_tool");
+  });
+
+  it("matches package src/index entrypoints by package directory name", async () => {
+    setupArrayAgent(["pi-permission-system"]);
+    withExtensions({
+      "/tmp/extensions/npm/hash/node_modules/@gotgenes/pi-permission-system/src/index.ts": ["perm_tool"],
+      "/tmp/extensions/npm/hash/node_modules/pi-web-access/src/index.ts": ["web_tool"],
+    });
+    const { session } = createSession("OK");
+    createAgentSession.mockResolvedValue({ session });
+
+    await runAgent(ctx, "Explore", "go", { pi });
+
+    const tools = lastToolsPassed();
+    expect(tools).toContain("perm_tool");
+    expect(tools).not.toContain("web_tool");
   });
 
   it("an absolute path is added to additionalExtensionPaths and its extension survives", async () => {
