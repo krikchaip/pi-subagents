@@ -268,6 +268,8 @@ A few rules the examples don't make obvious:
 
 ## Tools
 
+A fresh extension runtime exposes `Agent` only. The first successful new foreground or background spawn unlocks `get_subagent_result` and `steer_subagent` for that runtime. Registering scheduled work, rejected spawns, and resume do not unlock them; a scheduled job unlocks them when it fires and creates an agent. Extension reload or session replacement locks them again. This is runtime behavior, not a setting.
+
 ### `Agent`
 
 Launch a sub-agent.
@@ -371,13 +373,9 @@ When background agents complete, they notify the main agent. The **join mode** c
 
 **Opt-in:** off by default. Enable via `/agents → Settings → Orchestrator` or `orchestrator: true` in `subagents.json`.
 
-When off, the main agent is encouraged to delegate only when an available subagent description clearly fits the work. When on, the main agent receives orchestrator guidance: understand the whole request, plan, delegate suitable slices by default, and synthesize results. The footer shows `orchestrator on` while the setting is active.
+Off supplies compact delegation guidance and still permits autonomous delegation. On has the parent design, delegate, synthesize, and verify suitable multi-phase work. The policy source is the bundled [Off prompt](prompts/delegation.md), [On prompt](prompts/orchestrator.md), and [On initial-turn reminder](prompts/orchestrator-reminder.md).
 
-The full delegation and orchestrator guidance lives in bundled markdown under `prompts/`. Missing or empty prompt files warn once per process and skip that prompt block instead of falling back to hardcoded text.
-
-For orchestrator mode, a transient hidden reminder is injected only before real user input (interactive or RPC). Extension follow-up notifications, including background subagent completion messages, do not get the reminder and the reminder is never persisted to the session file.
-
-Subagents do not inherit the parent delegation/orchestrator prompt blocks when their system prompt is built in append mode.
+On inserts its hidden reminder only for real user input; it is not persisted. Child append prompts exclude all three parent-only blocks.
 
 ## Model Scope
 

@@ -492,7 +492,7 @@ export default function (pi: ExtensionAPI) {
       if (!sessionId) return;  // sessionId not yet available — try again on next event
       const path = resolveStorePath(ctx.cwd, sessionId);
       const store = new ScheduleStore(path);
-      scheduler.start(pi, ctx, manager, store);
+      scheduler.start(pi, ctx, manager, store, unlockControlTools);
       pi.events.emit("subagents:scheduler_ready", { sessionId, jobCount: store.list().length });
     } catch (err) {
       // Scheduling is non-essential — log and move on so the rest of the
@@ -503,6 +503,7 @@ export default function (pi: ExtensionAPI) {
 
   // Capture ctx from session_start for RPC spawn handler + start the scheduler.
   pi.on("session_start", async (_event, ctx) => {
+    lockControlTools();
     currentCtx = ctx;
     updateOrchestratorStatus(ctx);
     await manager.clearCompleted(true, "new");
@@ -510,6 +511,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_before_switch", async () => {
+    lockControlTools();
     await manager.clearCompleted(true, "resume");
     scheduler.stop();
   });
@@ -867,6 +869,35 @@ export default function (pi: ExtensionAPI) {
   }
 
   let pendingReminderForUserInput = false;
+
+  // Controls stay hidden until this runtime has successfully created an agent.
+  // This state deliberately remains closure-local so reloads and session
+  // replacements begin locked without restoring stale active-tool choices.
+  let controlToolsUnlocked = false;
+  const controlToolNames = new Set<string>([SUBAGENT_TOOL_NAMES.GET_RESULT, SUBAGENT_TOOL_NAMES.STEER]);
+
+  function lockControlTools(): void {
+    controlToolsUnlocked = false;
+    // ExtensionAPI always supplies these methods. The guard keeps the extension
+    // compatible with minimal programmatic hosts that only implement registration.
+    if (typeof pi.getActiveTools !== "function" || typeof pi.setActiveTools !== "function") return;
+    const activeTools = pi.getActiveTools();
+    pi.setActiveTools([...new Set([
+      ...activeTools.filter(name => !controlToolNames.has(name)),
+      SUBAGENT_TOOL_NAMES.AGENT,
+    ])]);
+  }
+
+  function unlockControlTools(): void {
+    if (controlToolsUnlocked) return;
+    if (typeof pi.getActiveTools !== "function" || typeof pi.setActiveTools !== "function") return;
+    pi.setActiveTools([...new Set([
+      ...pi.getActiveTools(),
+      SUBAGENT_TOOL_NAMES.GET_RESULT,
+      SUBAGENT_TOOL_NAMES.STEER,
+    ])]);
+    controlToolsUnlocked = true;
+  }
 
   pi.on("input", (event) => {
     pendingReminderForUserInput = event.source !== "extension" && event.streamingBehavior !== "steer";
@@ -1341,6 +1372,7 @@ Terse command-style prompts produce shallow, generic work.
             invocation: agentInvocation,
             ...bgCallbacks,
           });
+          unlockControlTools();
         } catch (err) {
           return textResult(err instanceof Error ? err.message : String(err));
         }
@@ -1472,6 +1504,7 @@ Terse command-style prompts produce shallow, generic work.
           // Set up the output file so streamToOutputFile can pick it up.
           const fgRec = manager.getRecord(fgAgentId);
           if (fgRec) {
+            unlockControlTools();
             fgRec.outputFile = createOutputFilePath(ctx.cwd, fgAgentId, ctx.sessionManager.getSessionId());
             writeInitialEntry(fgRec.outputFile, fgAgentId, params.prompt, ctx.cwd);
           }

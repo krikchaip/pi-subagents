@@ -52,13 +52,21 @@ export class SubagentScheduler {
   private pi: ExtensionAPI | undefined;
   private ctx: ExtensionContext | undefined;
   private manager: AgentManager | undefined;
+  private onAgentSpawned: (() => void) | undefined;
 
   /** Start the scheduler: bind to a session's store and arm enabled jobs. */
-  start(pi: ExtensionAPI, ctx: ExtensionContext, manager: AgentManager, store: ScheduleStore): void {
+  start(
+    pi: ExtensionAPI,
+    ctx: ExtensionContext,
+    manager: AgentManager,
+    store: ScheduleStore,
+    onAgentSpawned?: () => void,
+  ): void {
     this.pi = pi;
     this.ctx = ctx;
     this.manager = manager;
     this.store = store;
+    this.onAgentSpawned = onAgentSpawned;
 
     for (const job of store.list()) {
       if (job.enabled) this.scheduleJob(job);
@@ -75,6 +83,7 @@ export class SubagentScheduler {
     this.pi = undefined;
     this.ctx = undefined;
     this.manager = undefined;
+    this.onAgentSpawned = undefined;
   }
 
   /** True if start() has bound a store and the scheduler is active. */
@@ -256,6 +265,7 @@ export class SubagentScheduler {
     }
 
     this.emit({ type: "fired", jobId: id, agentId, name: job.name });
+    this.onAgentSpawned?.();
 
     const record = manager.getRecord(agentId);
     const finalize = (status: "success" | "error") => {
